@@ -1,0 +1,7 @@
+apiVersion: istiocarotation.intel.com/v1
+kind: NewCA
+metadata:
+  name: newca-sample
+spec:
+  # Add fields here
+  foo: bar

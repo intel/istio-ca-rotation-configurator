@@ -1,0 +1,7 @@
+domain: intel.com
+repo: istio-ca-rotation
+resources:
+- group: istiocarotation
+  kind: NewCA
+  version: v1
+version: "2"
