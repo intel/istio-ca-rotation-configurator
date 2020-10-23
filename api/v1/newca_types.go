@@ -20,22 +20,34 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+// +kubebuilder:validation:Enum=Complete;In progress;Failure
+type RotationState string
+
+const (
+	// CompleteRotation meanst that no CA rotation is in progress.
+	CompleteRotation RotationState = "Complete"
+
+	// InProgressRotation means that the rotation is happening right now.
+	InProgressRotation RotationState = "In progress"
+
+	// FailedRotation means that the rotation has failed.
+	FailedRotation RotationState = "Failure"
+)
 
 // NewCASpec defines the desired state of NewCA
 type NewCASpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// Name of the secret.
+	Secret string `json:"secret,omitempty"`
 
-	// Foo is an example field of NewCA. Edit NewCA_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	// Namespace of the secret.
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // NewCAStatus defines the observed state of NewCA
 type NewCAStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// Status tells if the cluster has succeeded in rotating the Istio CA. Possible
+	// values: "Complete", "In progress", "Failure"
+	Status RotationState `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true

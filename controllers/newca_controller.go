@@ -17,7 +17,10 @@ limitations under the License.
 package controllers
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -25,24 +28,269 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	istiocarotationv1 "istio-ca-rotation/api/v1"
+
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // NewCAReconciler reconciles a NewCA object
 type NewCAReconciler struct {
 	client.Client
-	Log    logr.Logger
-	Scheme *runtime.Scheme
+	Log        logr.Logger
+	Scheme     *runtime.Scheme
+	Namespaces []string
 }
 
 // +kubebuilder:rbac:groups=istiocarotation.intel.com,resources=newcas,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=istiocarotation.intel.com,resources=newcas/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;create;update;patch;list;watch
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;create;update;patch;watch
+
+const (
+	caCert    = "ca-cert.pem"
+	caKey     = "ca-key.pem"
+	rootCert  = "root-cert.pem"
+	certChain = "cert-chain.pem"
+
+	newCAName      = "new-ca"
+	newCANamespace = "istio-system"
+)
+
+func checkFiles(secret *corev1.Secret, fileList []string) bool {
+	if secret.Data == nil {
+		return false
+	}
+
+	for _, file := range fileList {
+		if _, found := secret.Data[file]; !found {
+			return false
+		}
+	}
+
+	return true
+}
+
+func isValidIstioSecret(secret *corev1.Secret) bool {
+	requiredFiles := []string{caCert, caKey}
+	return checkFiles(secret, requiredFiles)
+}
+
+func isValidCA(secret *corev1.Secret) bool {
+	requiredFiles := []string{caCert, caKey, rootCert}
+	return checkFiles(secret, requiredFiles)
+}
+
+func restartIstiod(client client.Client, log logr.Logger) error {
+	ctx := context.Background()
+	// Restart AuthService deployment by adding/updating an annotation.
+	deploymentName := types.NamespacedName{
+		Namespace: "istio-system",
+		Name:      "istiod",
+	}
+	_ = log.WithValues("Restarting Istiod deployment", deploymentName)
+	var deployment appsv1.Deployment
+	if err := client.Get(ctx, deploymentName, &deployment); err != nil {
+		_ = log.WithValues("Failed to find Istiod deployment", deploymentName)
+		return err
+	}
+
+	if deployment.Spec.Template.Annotations == nil {
+		deployment.Spec.Template.Annotations = make(map[string]string, 0)
+	}
+	deployment.Spec.Template.Annotations["newca-controller/restartedAt"] = time.Now().Format(time.RFC3339)
+	if err := client.Update(ctx, &deployment); err != nil {
+		_ = log.WithValues("Failed to update Istiod deployment", deploymentName)
+		return err
+	}
+
+	return nil
+}
+
+func (r *NewCAReconciler) setStatus(newca *istiocarotationv1.NewCA, status istiocarotationv1.RotationState) error {
+	ctx := context.Background()
+	_, err := ctrl.CreateOrUpdate(ctx, r, newca, func() error {
+		newca.Status.Status = status
+		return nil
+	})
+	return err
+}
+
+func (r *NewCAReconciler) getEnvoyCerts() error {
+	return nil
+}
 
 func (r *NewCAReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
-	_ = context.Background()
-	_ = r.Log.WithValues("newca", req.NamespacedName)
+	ctx := context.Background()
+	logger := r.Log.WithValues("newca", req.NamespacedName)
 
-	// your logic here
+	var newca istiocarotationv1.NewCA
+	if err := r.Get(ctx, req.NamespacedName, &newca); err != nil {
+		_ = r.Log.WithValues("NewCA not found, ignoring", req.NamespacedName)
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
 
+	// Check the name. We only accept one NewCA.
+	if newca.Name != newCAName || newca.Namespace != newCANamespace {
+		_ = r.Log.WithValues("NewCA in wrong place", req.NamespacedName)
+		return ctrl.Result{}, client.IgnoreNotFound(fmt.Errorf("Not expecting CR with this name/namespace"))
+	}
+
+	newSecretName := types.NamespacedName{
+		Name:      newca.Spec.Secret,
+		Namespace: newca.Spec.Namespace,
+	}
+
+	// Get the new cert from the secret.
+	var newSecret corev1.Secret
+	if err := r.Get(ctx, newSecretName, &newSecret); err != nil {
+		r.setStatus(&newca, istiocarotationv1.FailedRotation)
+		_ = r.Log.WithValues("Failed to find new secret", newSecretName)
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	var secret *corev1.Secret
+
+	// Get the user-provided CA from "cacerts" secret.
+	cacertsSecretName := types.NamespacedName{
+		Name:      "cacerts",
+		Namespace: "istio-system",
+	}
+	var cacertsSecret corev1.Secret
+	secret = &cacertsSecret
+
+	if err := r.Get(ctx, cacertsSecretName, &cacertsSecret); err != nil {
+		// Fall back to istio-generated "istio-ca-secret"
+		istioCaSecretName := types.NamespacedName{
+			Name:      "istio-ca-secret",
+			Namespace: "istio-system",
+		}
+		var istioCaSecret corev1.Secret
+		if err := r.Get(ctx, istioCaSecretName, &istioCaSecret); err != nil {
+			r.setStatus(&newca, istiocarotationv1.FailedRotation)
+			_ = r.Log.WithValues("Failed to find original secret", istioCaSecretName)
+			return ctrl.Result{}, client.IgnoreNotFound(err)
+		}
+		secret = &istioCaSecret
+	}
+
+	if !isValidIstioSecret(secret) {
+		r.setStatus(&newca, istiocarotationv1.FailedRotation)
+		_ = r.Log.WithValues("Invalid Istio secret", cacertsSecretName)
+		return ctrl.Result{}, client.IgnoreNotFound(fmt.Errorf("Invalid Istio secret"))
+	}
+
+	if !isValidCA(&newSecret) {
+		r.setStatus(&newca, istiocarotationv1.FailedRotation)
+		_ = r.Log.WithValues("Invalid new secret", newSecretName)
+		return ctrl.Result{}, client.IgnoreNotFound(fmt.Errorf("Invalid new secret"))
+	}
+
+	// If the certs don't match, make the status "In progress", else return.
+	if newCert, found := newSecret.Data[caCert]; found {
+		if oldCert, found := secret.Data[caCert]; found {
+			if bytes.Compare(oldCert, newCert) == 0 {
+				// Certificates are equal, no need to reconcile them.
+				r.setStatus(&newca, istiocarotationv1.CompleteRotation)
+				return ctrl.Result{}, nil
+			}
+		}
+	} else {
+		// The new certificate data is invalid, FIXME: we have already checked this.
+		r.setStatus(&newca, istiocarotationv1.FailedRotation)
+		_ = r.Log.WithValues("Invalid certificate data", newSecretName)
+		return ctrl.Result{}, fmt.Errorf("Invalid certificate data")
+	}
+
+	// Start the rotation
+	err := r.setStatus(&newca, istiocarotationv1.InProgressRotation)
+	if err != nil {
+		_ = r.Log.WithValues("Can't set rotation status", newCAName)
+		return ctrl.Result{}, err
+	}
+
+	// The new cert will be installed as "cacerts", since that's the name for user CA.
+	secret.ObjectMeta.Name = cacertsSecretName.Name
+	secret.ObjectMeta.Namespace = cacertsSecretName.Namespace
+
+	// Concatenate the certs together to create a combined cert. Note that
+	// self-signed CAs don't have a root cert.
+	combinedRootCerts := string(newSecret.Data[rootCert])
+	if oldCert, found := secret.Data[rootCert]; found {
+		combinedRootCerts = string(oldCert) + "\n" + string(newSecret.Data[rootCert])
+	}
+	combinedIntermediateCerts := string(secret.Data[caCert]) + "\n" + string(newSecret.Data[caCert])
+
+	// Install the combined cert to "cacerts".
+	_, err = ctrl.CreateOrUpdate(ctx, r, secret, func() error {
+		secret.Data[caCert] = []byte(combinedIntermediateCerts)
+		secret.Data[rootCert] = []byte(combinedRootCerts)
+		secret.Data[caKey] = newSecret.Data[caKey]
+		certChainValue, found := newSecret.Data[certChain]
+		if found {
+			secret.Data[certChain] = certChainValue
+		}
+		return nil
+	})
+	if err != nil {
+		r.setStatus(&newca, istiocarotationv1.FailedRotation)
+		_ = r.Log.WithValues("Failed to update Istio secret with combined secret", cacertsSecretName)
+		return ctrl.Result{}, err
+	}
+
+	// Restart istiod so that it uses the new CA.
+	err = restartIstiod(r, logger)
+	if err != nil {
+		r.setStatus(&newca, istiocarotationv1.FailedRotation)
+		_ = r.Log.WithValues("Failed to restart Istiod with combined secret", cacertsSecretName)
+		return ctrl.Result{}, err
+	}
+
+	// Periodically check that the workload certs match with the combined cert. This could be
+	// also done by leaving this loop and then watching the workload certs?
+	// Docs strongly advise that clients shouldn't be able to list and watch secrets (see
+	// https://kubernetes.io/docs/concepts/configuration/secret/#clients-that-use-the-secret-api).
+	// FIXME: skip this for now.
+	//
+	// Alternatively: call `istioctl proxy-status` and try to figure out if the SDS has been
+	// used for every Istio.
+	// Docs just say: "Sleep 20 seconds for the mTLS policy to take effect" (see
+	// https://istio.io/latest/docs/tasks/security/cert-management/plugin-ca-cert/).
+	//
+	// Istioctl can retrieve the certs with:
+	//
+	//   $ istioctl proxy-config secret <pod> -o json
+
+	// When the workloads are ready, reset the istio-ca-secret to contain only the new certs.
+	_, err = ctrl.CreateOrUpdate(ctx, r, secret, func() error {
+		secret.Data[caCert] = newSecret.Data[caCert]
+		secret.Data[rootCert] = newSecret.Data[rootCert]
+		secret.Data[caKey] = newSecret.Data[caKey]
+		certChainValue, found := newSecret.Data[certChain]
+		if found {
+			secret.Data[certChain] = certChainValue
+		}
+		return nil
+	})
+	if err != nil {
+		r.setStatus(&newca, istiocarotationv1.FailedRotation)
+		_ = r.Log.WithValues("Failed to update Istio secret with new secret", cacertsSecretName)
+		return ctrl.Result{}, err
+	}
+
+	// Restart istiod so that it uses the new CA.
+	err = restartIstiod(r, logger)
+	if err != nil {
+		r.setStatus(&newca, istiocarotationv1.FailedRotation)
+		_ = r.Log.WithValues("Failed to restart Istiod with new secret", cacertsSecretName)
+		return ctrl.Result{}, err
+	}
+
+	// FIXME: again periodically check that the workload cert roots match with the new cert root.
+
+	// When they are in sync, make the status "Complete".
+	r.setStatus(&newca, istiocarotationv1.CompleteRotation)
 	return ctrl.Result{}, nil
 }
 

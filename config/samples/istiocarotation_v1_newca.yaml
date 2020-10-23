@@ -1,7 +1,8 @@
 apiVersion: istiocarotation.intel.com/v1
 kind: NewCA
 metadata:
-  name: newca-sample
+  name: new-ca
+  namespace: istio-system
 spec:
-  # Add fields here
-  foo: bar
+  secret: new-secret
+  namespace: istio-system
