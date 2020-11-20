@@ -31,6 +31,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"k8s.io/apimachinery/pkg/types"
 )
@@ -172,19 +173,22 @@ func (r *NewCAReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 			_ = r.Log.WithValues("Failed to find original secret", istioCaSecretName)
 			return ctrl.Result{}, client.IgnoreNotFound(err)
 		}
-		secret = &istioCaSecret
-	}
 
-	if !isValidIstioSecret(secret) {
-		r.setStatus(&newca, istiocarotationv1.FailedRotation)
-		_ = r.Log.WithValues("Invalid Istio secret", cacertsSecretName)
-		return ctrl.Result{}, client.IgnoreNotFound(fmt.Errorf("Invalid Istio secret"))
+		// Since we'll need to create new cacerts, initialize a new object for it.
+		// The new cert will be installed as "cacerts", since that's the name for user CA.
+		secret = &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      cacertsSecretName.Name,
+				Namespace: cacertsSecretName.Namespace,
+			},
+			Data: map[string][]byte{},
+		}
 	}
 
 	if !isValidCA(&newSecret) {
 		r.setStatus(&newca, istiocarotationv1.FailedRotation)
 		_ = r.Log.WithValues("Invalid new secret", newSecretName)
-		return ctrl.Result{}, client.IgnoreNotFound(fmt.Errorf("Invalid new secret"))
+		return ctrl.Result{}, fmt.Errorf("Invalid new secret")
 	}
 
 	// If the certs don't match, make the status "In progress", else return.
@@ -209,10 +213,6 @@ func (r *NewCAReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		_ = r.Log.WithValues("Can't set rotation status", newCAName)
 		return ctrl.Result{}, err
 	}
-
-	// The new cert will be installed as "cacerts", since that's the name for user CA.
-	secret.ObjectMeta.Name = cacertsSecretName.Name
-	secret.ObjectMeta.Namespace = cacertsSecretName.Namespace
 
 	// Concatenate the certs together to create a combined cert. Note that
 	// self-signed CAs don't have a root cert.
@@ -262,7 +262,7 @@ func (r *NewCAReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	//
 	//   $ istioctl proxy-config secret <pod> -o json
 
-	// When the workloads are ready, reset the istio-ca-secret to contain only the new certs.
+	// When the workloads are ready, reset "cacerts" to contain only the new certs.
 	_, err = ctrl.CreateOrUpdate(ctx, r, secret, func() error {
 		secret.Data[caCert] = newSecret.Data[caCert]
 		secret.Data[rootCert] = newSecret.Data[rootCert]
