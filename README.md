@@ -18,3 +18,14 @@ This is a controller for rotating Istio root CA. See https://istio.io/latest/doc
     
     # Deploy it to the cluster
     make deploy IMG=<registry-name>/<tag>
+
+## Testing
+
+    # Create certs according to instructions in Istio docs:
+    cd <istio-dir>
+    make -f tools/certs/Makefile.selfsigned.mk root-ca
+    make -f tools/certs/Makefile.selfsigned.mk cluster1-cacerts
+    kubectl create secret generic new-secret -n istio-system --from-file=cluster1/ca-cert.pem --from-file=cluster1/ca-key.pem --from-file=cluster1/root-cert.pem --from-file=cluster1/cert-chain.pem
+    
+    # Install the NewCA object
+    kubectl apply -f config/samples/istiocarotation_v1_newca.yaml
