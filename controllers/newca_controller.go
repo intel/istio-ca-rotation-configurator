@@ -128,13 +128,13 @@ func (r *NewCAReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 
 	var newca istiocarotationv1.NewCA
 	if err := r.Get(ctx, req.NamespacedName, &newca); err != nil {
-		_ = r.Log.WithValues("NewCA not found, ignoring", req.NamespacedName)
+		logger.Info("NewCA not found, ignoring")
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
 	// Check the name. We only accept one NewCA.
 	if newca.Name != newCAName || newca.Namespace != newCANamespace {
-		_ = r.Log.WithValues("NewCA in wrong place", req.NamespacedName)
+		logger.Info("NewCA in wrong place")
 		return ctrl.Result{}, client.IgnoreNotFound(fmt.Errorf("Not expecting CR with this name/namespace"))
 	}
 
@@ -147,7 +147,7 @@ func (r *NewCAReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	var newSecret corev1.Secret
 	if err := r.Get(ctx, newSecretName, &newSecret); err != nil {
 		r.setStatus(&newca, istiocarotationv1.FailedRotation)
-		_ = r.Log.WithValues("Failed to find new secret", newSecretName)
+		logger.Info("Failed to find new secret")
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
@@ -170,7 +170,7 @@ func (r *NewCAReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		var istioCaSecret corev1.Secret
 		if err := r.Get(ctx, istioCaSecretName, &istioCaSecret); err != nil {
 			r.setStatus(&newca, istiocarotationv1.FailedRotation)
-			_ = r.Log.WithValues("Failed to find original secret", istioCaSecretName)
+			logger.Info("Failed to find original secret")
 			return ctrl.Result{}, client.IgnoreNotFound(err)
 		}
 
@@ -187,7 +187,7 @@ func (r *NewCAReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 
 	if !isValidCA(&newSecret) {
 		r.setStatus(&newca, istiocarotationv1.FailedRotation)
-		_ = r.Log.WithValues("Invalid new secret", newSecretName)
+		logger.Info("Invalid new secret")
 		return ctrl.Result{}, fmt.Errorf("Invalid new secret")
 	}
 
@@ -203,14 +203,14 @@ func (r *NewCAReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	} else {
 		// The new certificate data is invalid, FIXME: we have already checked this.
 		r.setStatus(&newca, istiocarotationv1.FailedRotation)
-		_ = r.Log.WithValues("Invalid certificate data", newSecretName)
+		logger.Info("Invalid certificate data")
 		return ctrl.Result{}, fmt.Errorf("Invalid certificate data")
 	}
 
 	// Start the rotation
 	err := r.setStatus(&newca, istiocarotationv1.InProgressRotation)
 	if err != nil {
-		_ = r.Log.WithValues("Can't set rotation status", newCAName)
+		logger.Info("Can't set rotation status")
 		return ctrl.Result{}, err
 	}
 
@@ -235,7 +235,7 @@ func (r *NewCAReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	})
 	if err != nil {
 		r.setStatus(&newca, istiocarotationv1.FailedRotation)
-		_ = r.Log.WithValues("Failed to update Istio secret with combined secret", cacertsSecretName)
+		logger.Info("Failed to update Istio secret with combined secret")
 		return ctrl.Result{}, err
 	}
 
@@ -243,7 +243,7 @@ func (r *NewCAReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	err = restartIstiod(r, logger)
 	if err != nil {
 		r.setStatus(&newca, istiocarotationv1.FailedRotation)
-		_ = r.Log.WithValues("Failed to restart Istiod with combined secret", cacertsSecretName)
+		logger.Info("Failed to restart Istiod with combined secret")
 		return ctrl.Result{}, err
 	}
 
@@ -275,7 +275,7 @@ func (r *NewCAReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	})
 	if err != nil {
 		r.setStatus(&newca, istiocarotationv1.FailedRotation)
-		_ = r.Log.WithValues("Failed to update Istio secret with new secret", cacertsSecretName)
+		logger.Info("Failed to update Istio secret with new secret")
 		return ctrl.Result{}, err
 	}
 
@@ -283,7 +283,7 @@ func (r *NewCAReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	err = restartIstiod(r, logger)
 	if err != nil {
 		r.setStatus(&newca, istiocarotationv1.FailedRotation)
-		_ = r.Log.WithValues("Failed to restart Istiod with new secret", cacertsSecretName)
+		logger.Info("Failed to restart Istiod with new secret")
 		return ctrl.Result{}, err
 	}
 
