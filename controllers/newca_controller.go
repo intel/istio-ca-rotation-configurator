@@ -207,6 +207,25 @@ func (r *NewCAReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		return ctrl.Result{}, fmt.Errorf("Invalid certificate data")
 	}
 
+        // TODO: Rotating certs when ROOTCA is changed
+        // Now it rotates only if intermediateCA has changed and it should be
+        // generated based on current ROOTCA
+        // FIXME: How to verify this intermediate certs generated based on current root certs?
+        if newRoot, found := newSecret.Data[rootCert]; found {
+                if oldRoot, found := secret.Data[rootCert]; found {
+                        if bytes.Compare(oldRoot, newRoot) != 0 {
+                                r.setStatus(&newca, istiocarotationv1.CompleteRotation)
+                                logger.Info("Root cert changed, rotation not supported")
+                                return ctrl.Result{}, nil
+                        }
+                }
+        } else {
+                // The new certificate data is invalid, FIXME: we have already checked this.
+                r.setStatus(&newca, istiocarotationv1.FailedRotation)
+                logger.Info("Invalid root certificate data")
+                return ctrl.Result{}, fmt.Errorf("Invalid root certificate data")
+        }
+
 	// Start the rotation
 	err := r.setStatus(&newca, istiocarotationv1.InProgressRotation)
 	if err != nil {
@@ -214,55 +233,7 @@ func (r *NewCAReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		return ctrl.Result{}, err
 	}
 
-	// Concatenate the certs together to create a combined cert. Note that
-	// self-signed CAs don't have a root cert.
-	combinedRootCerts := string(newSecret.Data[rootCert])
-	if oldCert, found := secret.Data[rootCert]; found {
-		combinedRootCerts = string(oldCert) + "\n" + string(newSecret.Data[rootCert])
-	}
-	combinedIntermediateCerts := string(secret.Data[caCert]) + "\n" + string(newSecret.Data[caCert])
-
-	// Install the combined cert to "cacerts".
-	_, err = ctrl.CreateOrUpdate(ctx, r, secret, func() error {
-		secret.Data[caCert] = []byte(combinedIntermediateCerts)
-		secret.Data[rootCert] = []byte(combinedRootCerts)
-		secret.Data[caKey] = newSecret.Data[caKey]
-		certChainValue, found := newSecret.Data[certChain]
-		if found {
-			secret.Data[certChain] = certChainValue
-		}
-		return nil
-	})
-	if err != nil {
-		r.setStatus(&newca, istiocarotationv1.FailedRotation)
-		logger.Info("Failed to update Istio secret with combined secret")
-		return ctrl.Result{}, err
-	}
-
-	// Restart istiod so that it uses the new CA.
-	err = restartIstiod(r, logger)
-	if err != nil {
-		r.setStatus(&newca, istiocarotationv1.FailedRotation)
-		logger.Info("Failed to restart Istiod with combined secret")
-		return ctrl.Result{}, err
-	}
-
-	// Periodically check that the workload certs match with the combined cert. This could be
-	// also done by leaving this loop and then watching the workload certs?
-	// Docs strongly advise that clients shouldn't be able to list and watch secrets (see
-	// https://kubernetes.io/docs/concepts/configuration/secret/#clients-that-use-the-secret-api).
-	// FIXME: skip this for now.
-	//
-	// Alternatively: call `istioctl proxy-status` and try to figure out if the SDS has been
-	// used for every Istio.
-	// Docs just say: "Sleep 20 seconds for the mTLS policy to take effect" (see
-	// https://istio.io/latest/docs/tasks/security/cert-management/plugin-ca-cert/).
-	//
-	// Istioctl can retrieve the certs with:
-	//
-	//   $ istioctl proxy-config secret <pod> -o json
-
-	// When the workloads are ready, reset "cacerts" to contain only the new certs.
+        // Install the new certs to "cacerts".
 	_, err = ctrl.CreateOrUpdate(ctx, r, secret, func() error {
 		secret.Data[caCert] = newSecret.Data[caCert]
 		secret.Data[rootCert] = newSecret.Data[rootCert]
@@ -287,7 +258,7 @@ func (r *NewCAReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		return ctrl.Result{}, err
 	}
 
-	// FIXME: again periodically check that the workload cert roots match with the new cert root.
+	// FIXME: Periodically check that the workload cert roots match with the new cert root.
 
 	// When they are in sync, make the status "Complete".
 	r.setStatus(&newca, istiocarotationv1.CompleteRotation)
