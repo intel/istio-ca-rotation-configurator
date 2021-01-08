@@ -2,15 +2,30 @@
 
 ## Introduction
 
-This is a controller for rotating Istio intermediate CA (ROOT CA rotation will be supported in future). See https://istio.io/latest/docs/tasks/security/cert-management/plugin-ca-cert/ for information abou the process.
+This is a controller for rotating Istio intermediate CA (root CA
+rotation will be supported in the future). See
+https://istio.io/latest/docs/tasks/security/cert-management/plugin-ca-cert/
+for information about the process.
 
-  1. Create a new intermediate CA which is based on current ROOT CA.
-  2. Controller checks if intermediate certs are changed, it will install new certs and start istiod to take new certs. Then certs will be propagated to worklods.
-  3. Controller will ignore if root certs are changed.
+  1. Create a new intermediate CA which is based on current root CA.
+  2. Install a NewCA CR with a known name which points to the new
+     intermediate CA secret.
+  3. Controller checks if intermediate CA certificate is changed. It
+     installs the new CA cert and key as a plugin-in CA and restarts
+     istiod. Then workload certificates will be propagated to workloads.
+     Controller will not rotate certs if root cert is changed.
+  4. Controller reports errors and conditions back in the Status field
+     of the NewCA object.
 
-Future work (If ROOT-CA has been changed):
-  1. Create a combined CA secret (old and new CA certificates together) and install it. Wait until it has propagated to the workloads. The combined certitifate means that the workloads will be able to authenticate mTLS connections whether or not the other end of the connection has a ceritificate already signed by the new CA key.
-  2. When all workloads have updated workload certs, the CA secret is updated to contain only the new intermediate certificate.
+Future work (If root CA has been changed):
+
+  1. Create a combined CA secret (old and new CA certificates together)
+     and install it. Wait until it has propagated to the workloads. The
+     combined certitifate means that the workloads will be able to
+     authenticate mTLS connections whether or not the other end of the
+     connection has a ceritificate already signed by the new CA key.
+  2. When all workloads have updated workload certs, the CA secret is
+     updated to contain only the new intermediate certificate.
 
 ## Installation
 
