@@ -1,4 +1,4 @@
-module istio-ca-rotation
+module github.com/intel/istio-ca-rotation-configurator
 
 go 1.13
 

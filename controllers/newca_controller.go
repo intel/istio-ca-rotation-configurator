@@ -27,7 +27,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	istiocarotationv1 "istio-ca-rotation/api/v1"
+	istiocarotationv1 "github.com/intel/istio-ca-rotation-configurator/api/v1"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -207,24 +207,24 @@ func (r *NewCAReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		return ctrl.Result{}, fmt.Errorf("Invalid certificate data")
 	}
 
-        // TODO: Rotating certs when ROOTCA is changed
-        // Now it rotates only if intermediateCA has changed and it should be
-        // generated based on current ROOTCA
-        // FIXME: How to verify this intermediate certs generated based on current root certs?
-        if newRoot, found := newSecret.Data[rootCert]; found {
-                if oldRoot, found := secret.Data[rootCert]; found {
-                        if bytes.Compare(oldRoot, newRoot) != 0 {
-                                r.setStatus(&newca, istiocarotationv1.CompleteRotation)
-                                logger.Info("Root cert changed, rotation not supported")
-                                return ctrl.Result{}, nil
-                        }
-                }
-        } else {
-                // The new certificate data is invalid, FIXME: we have already checked this.
-                r.setStatus(&newca, istiocarotationv1.FailedRotation)
-                logger.Info("Invalid root certificate data")
-                return ctrl.Result{}, fmt.Errorf("Invalid root certificate data")
-        }
+	// TODO: Rotating certs when ROOTCA is changed
+	// Now it rotates only if intermediateCA has changed and it should be
+	// generated based on current ROOTCA
+	// FIXME: How to verify this intermediate certs generated based on current root certs?
+	if newRoot, found := newSecret.Data[rootCert]; found {
+		if oldRoot, found := secret.Data[rootCert]; found {
+			if bytes.Compare(oldRoot, newRoot) != 0 {
+				r.setStatus(&newca, istiocarotationv1.CompleteRotation)
+				logger.Info("Root cert changed, rotation not supported")
+				return ctrl.Result{}, nil
+			}
+		}
+	} else {
+		// The new certificate data is invalid, FIXME: we have already checked this.
+		r.setStatus(&newca, istiocarotationv1.FailedRotation)
+		logger.Info("Invalid root certificate data")
+		return ctrl.Result{}, fmt.Errorf("Invalid root certificate data")
+	}
 
 	// Start the rotation
 	err := r.setStatus(&newca, istiocarotationv1.InProgressRotation)
@@ -233,7 +233,7 @@ func (r *NewCAReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		return ctrl.Result{}, err
 	}
 
-        // Install the new certs to "cacerts".
+	// Install the new certs to "cacerts".
 	_, err = ctrl.CreateOrUpdate(ctx, r, secret, func() error {
 		secret.Data[caCert] = newSecret.Data[caCert]
 		secret.Data[rootCert] = newSecret.Data[rootCert]

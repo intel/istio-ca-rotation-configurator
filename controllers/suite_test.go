@@ -30,7 +30,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	istiocarotationv1 "istio-ca-rotation/api/v1"
+	istiocarotationv1 "github.com/intel/istio-ca-rotation-configurator/api/v1"
 	// +kubebuilder:scaffold:imports
 )
 
