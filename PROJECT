@@ -1,5 +1,5 @@
 domain: intel.com
-repo: istio-ca-rotation
+repo: github.com/intel/istio-ca-rotation-configurator
 resources:
 - group: istiocarotation
   kind: NewCA
