@@ -1,5 +1,19 @@
 # Istio CA rotation
 
+## Obsolete
+
+Intermediate CA rotation is supported in upstream. We are making
+this project obsolete.
+
+This feature is supported in upstream (https://github.com/istio/istio/pull/31522).
+It is disabled by default in Istio. To utilize this feature please enable
+it through environment variable AUTO_RELOAD_PLUGIN_CERTS. This avoids restarting
+istiod when new Intermediate CA is introduced. Istiod will monitor the CA files
+and automatically loads the certs when it notice the changes. Root CA rotation
+is not yet supported in upstream as well. If you would like to introduce new
+Root CA, restart istiod and all workloads.
+
+
 ## Introduction
 
 This is a controller for rotating Istio intermediate CA (root CA
